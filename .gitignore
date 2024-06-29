@@ -1,0 +1,45 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+rentseekerbot
+cmd
+
+# Output of the `go test -coverprofile` command
+*.out
+
+# Build directories
+bin/
+build/
+
+# Environment variable files
+.env
+
+# Dependency directories
+vendor/
+
+# IDE/editor specific files
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# OS generated files
+.DS_Store
+Icon?
+._*
+
+# Go module files
+go.sum
+go.mod
+
+# Database files
+*.db
+
+Makefile
