@@ -2,8 +2,12 @@
 package bot
 
 import (
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
+	"database/sql"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"imitation_project/internal/database"
 	"log"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -42,10 +46,7 @@ func (b *Bot) Start() {
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 
-	updates, err := b.api.GetUpdatesChan(u)
-	if err != nil {
-		log.Fatalf("Failed to get updates channel: %v", err)
-	}
+	updates := b.api.GetUpdatesChan(u)
 
 	// Main event loop
 	for update := range updates {
@@ -109,9 +110,72 @@ func (b *Bot) handleCommand(message *tgbotapi.Message) {
 // It takes the chat ID and the message text as input.
 func (b *Bot) sendMessage(chatID int64, text string, markup interface{}) {
 	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = "HTML"
 	msg.ReplyMarkup = markup
 	_, err := b.api.Send(msg)
 	if err != nil {
 		log.Printf("Error sending message: %v", err)
 	}
+}
+
+func (b *Bot) searchProperties(preferences map[string]string) ([]database.Property, error) {
+	filters := make(map[string]interface{})
+
+	if v, ok := preferences["property_type"]; ok && v != "" {
+		filters["type"] = v
+	}
+	if v, ok := preferences["bedrooms"]; ok && v != "" {
+		if v == "studio" {
+			filters["bedrooms"] = 0
+		} else {
+			bedrooms, err := strconv.Atoi(v)
+			if err == nil {
+				filters["bedrooms"] = bedrooms
+			}
+		}
+	}
+	if v, ok := preferences["price_range"]; ok && v != "" {
+		minPrice, maxPrice := parsePriceRange(v)
+		filters["min_price"] = minPrice
+		filters["max_price"] = maxPrice
+	}
+	if v, ok := preferences["location"]; ok && v != "" {
+		filters["location"] = v
+	}
+
+	if v, ok := preferences["furnished"]; ok {
+		furnished := strings.ToLower(v) == "furnished"
+		filters["furnished"] = furnished
+	}
+
+	db, err := sql.Open("sqlite3", "properties.db")
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	return database.GetProperties(db, filters)
+}
+
+func parsePriceRange(priceRange string) (int, int) {
+	parts := strings.Split(priceRange, "-")
+	if len(parts) != 2 {
+		return 0, 1000000
+	}
+
+	// Trim spaces and parse to integers
+	min, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil {
+		min = 0
+	}
+	max, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil {
+		max = 1000000
+	}
+
+	if min > max {
+		min, max = max, min
+	}
+
+	return min, max
 }

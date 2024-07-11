@@ -2,8 +2,11 @@ package bot
 
 import (
 	"fmt"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"imitation_project/internal/database"
+	"log"
 	"strings"
+	"time"
 )
 
 // handleStartCommand processes the /start command.
@@ -30,7 +33,7 @@ func (b *Bot) handleCallbackQuery(query *tgbotapi.CallbackQuery) {
 	case "start_preferences":
 		b.askPropertyType(query.Message.Chat.ID)
 	case "flat", "house":
-		state.Preferences["propery_type"] = query.Data
+		state.Preferences["property_type"] = query.Data
 		b.askPriceRange(query.Message.Chat.ID)
 	case "studio", "1", "2", "3", "4", "5":
 		state.Preferences["bedrooms"] = query.Data
@@ -41,7 +44,11 @@ func (b *Bot) handleCallbackQuery(query *tgbotapi.CallbackQuery) {
 	}
 
 	b.updateUserState(int64(query.From.ID), state)
-	b.api.AnswerCallbackQuery(tgbotapi.NewCallback(query.ID, ""))
+	callbackConfig := tgbotapi.NewCallback(query.ID, "")
+	_, err := b.api.Request(callbackConfig)
+	if err != nil {
+		log.Printf("Error answering callback query: %v", err)
+	}
 }
 
 func (b *Bot) handleHelpCommand(message *tgbotapi.Message) {
@@ -181,5 +188,101 @@ func (b *Bot) showSummary(chatID int64, preferences map[string]string) {
 		preferences["location"])
 
 	b.sendMessage(chatID, summary, nil)
-	// TODO: add a function to perform the actual search
+
+	// Perform the search
+	properties, err := b.searchProperties(preferences)
+	if err != nil {
+		b.sendMessage(chatID, "Sorry, there was an error while searching for properties. Please try again later.", nil)
+		return
+	}
+	if len(properties) == 0 {
+		b.sendMessage(chatID, "Sorry, no properties match your criteria. Try adjusting your prefernces and searching again.", nil)
+		return
+	}
+
+	b.presentSearchResults(chatID, properties)
+}
+
+func (b *Bot) presentSearchResults(chatID int64, properties []database.Property) {
+	if len(properties) == 0 {
+		b.sendMessage(chatID, "Sorry, no properties match your criteria. Try adjusting your preferences and searching again.", nil)
+		return
+	}
+
+	// Present first 3 properties (or less if there are fewer than 3)
+	numInitialProperties := min(3, len(properties))
+	for _, prop := range properties[:numInitialProperties] {
+		b.presentProperty(chatID, prop)
+		time.Sleep(2 * time.Second)
+	}
+
+	if len(properties) > 3 {
+		b.sendMessage(chatID, "A few moments later...", nil)
+		time.Sleep(3 * time.Second)
+
+		// Present next 2 properties (or less if there are fewer than 5 total)
+		numNextProperties := min(2, len(properties)-3)
+		for _, prop := range properties[3 : 3+numNextProperties] {
+			b.presentProperty(chatID, prop)
+			time.Sleep(2 * time.Second)
+		}
+
+		if len(properties) > 5 {
+			b.sendMessage(chatID, "A few moments later...", nil)
+			time.Sleep(3 * time.Second)
+
+			b.sendMessage(chatID, "🔔 Alert: New property found matching your criteria!", nil)
+			time.Sleep(1 * time.Second)
+
+			// Present the last property
+			b.presentProperty(chatID, properties[len(properties)-1])
+		}
+	}
+
+	b.sendMessage(chatID, "That's all the properties I found matching your criteria. Would you like to start a new search?", nil)
+}
+
+func (b *Bot) presentProperty(chatID int64, prop database.Property) {
+	message := fmt.Sprintf(
+		"🏠 %s\n"+
+			"💰 £%d per month\n"+
+			"🛏 %d bedrooms\n"+
+			"📍 %s\n"+
+			"🔑 %s\n\n"+
+			"📝 Description: %s\n\n"+
+			"🔗 <a href=\"%s\">View on website</a>",
+		prop.Type,
+		prop.PricePerMonth,
+		prop.Bedrooms,
+		prop.Location,
+		propertyFurnished(prop.Furnished),
+		prop.Description,
+		prop.WebLink,
+	)
+
+	if len(prop.PhotoURLs) > 0 {
+		media := make([]interface{}, len(prop.PhotoURLs))
+		for i, photoURL := range prop.PhotoURLs {
+			media[i] = tgbotapi.NewInputMediaPhoto(tgbotapi.FileURL(photoURL))
+		}
+
+		mediaGroup := tgbotapi.NewMediaGroup(chatID, media)
+		_, err := b.api.Send(mediaGroup)
+		if err != nil {
+			log.Printf("Error sending media group: %v", err)
+			// Fallback to text message if media group fails
+			b.sendMessage(chatID, message, nil)
+		}
+	} else {
+		// If no photos, send as a text message
+		b.sendMessage(chatID, message, nil)
+	}
+}
+
+// propertyFurnished converts boolean to "Furnished" or "Unfurnished"
+func propertyFurnished(furnished bool) string {
+	if furnished {
+		return "Furnished"
+	}
+	return "Unfurnished"
 }
