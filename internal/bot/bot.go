@@ -4,29 +4,39 @@ package bot
 import (
 	"database/sql"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-	"imitation_project/internal/database"
 	"log"
-	"strconv"
-	"strings"
 	"sync"
 )
 
 // Bot represents the Telegram bot instance.
+// It handles user interactions, maintains user states,
+// and interfaces with the database for property searches.
 type Bot struct {
 	api   *tgbotapi.BotAPI
+	db    *sql.DB
 	state map[int64]*UserState
 	mu    sync.Mutex
+}
+
+// SearchPreferences represents the user's search criteria for properties.
+// It encapsulates various options that a user can select to filter their property search.
+type SearchPreferences struct {
+	PropertyTypes    map[string]bool
+	BedroomOptions   map[string]bool
+	FurnishedOptions map[string]bool
+	PriceRange       string
+	Location         string
 }
 
 // UserState represents the current state of a user's interaction with the bot.
 type UserState struct {
 	Stage       string
-	Preferences map[string]string
+	Preferences *SearchPreferences
 }
 
 // New creates a new instance of the Bot.
 // It takes a Telegram bot token as input and returns a new Bot instance and any error encountered.
-func New(token string) (*Bot, error) {
+func New(token string, db *sql.DB) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, err
@@ -34,6 +44,7 @@ func New(token string) (*Bot, error) {
 
 	return &Bot{
 		api:   api,
+		db:    db,
 		state: make(map[int64]*UserState),
 	}, nil
 }
@@ -51,9 +62,9 @@ func (b *Bot) Start() {
 	// Main event loop
 	for update := range updates {
 		if update.Message != nil {
-			b.handleMessage(update.Message)
+			go b.handleMessage(update.Message)
 		} else if update.CallbackQuery != nil {
-			b.handleCallbackQuery(update.CallbackQuery)
+			go b.handleCallbackQuery(update.CallbackQuery)
 		}
 	}
 }
@@ -68,7 +79,7 @@ func (b *Bot) getUserState(userID int64) *UserState {
 	}
 	state := &UserState{
 		Stage:       "initial",
-		Preferences: make(map[string]string),
+		Preferences: NewFlexibleSearchPreferences(),
 	}
 	b.state[userID] = state
 	return state
@@ -101,6 +112,12 @@ func (b *Bot) handleCommand(message *tgbotapi.Message) {
 		b.handleHelpCommand(message)
 	case "search":
 		b.handleSearchCommand(message)
+	case "save_preferences":
+		b.handleSavePreferences(message)
+	case "view_preferences":
+		b.handleViewPreferences(message)
+	case "clear_preferences":
+		b.handleClearPreferences(message)
 	default:
 		b.sendMessage(message.Chat.ID, "Unknown command. Type /help for available commands.", nil)
 	}
@@ -118,64 +135,42 @@ func (b *Bot) sendMessage(chatID int64, text string, markup interface{}) {
 	}
 }
 
-func (b *Bot) searchProperties(preferences map[string]string) ([]database.Property, error) {
-	filters := make(map[string]interface{})
-
-	if v, ok := preferences["property_type"]; ok && v != "" {
-		filters["type"] = v
+// NewFlexibleSearchPreferences creates and returns a new SearchPreferences struct.
+// It initializes the PropertyTypes, BedroomOptions, and FurnishedOptions maps.
+func NewFlexibleSearchPreferences() *SearchPreferences {
+	return &SearchPreferences{
+		PropertyTypes:    make(map[string]bool),
+		BedroomOptions:   make(map[string]bool),
+		FurnishedOptions: make(map[string]bool),
 	}
-	if v, ok := preferences["bedrooms"]; ok && v != "" {
-		if v == "studio" {
-			filters["bedrooms"] = 0
-		} else {
-			bedrooms, err := strconv.Atoi(v)
-			if err == nil {
-				filters["bedrooms"] = bedrooms
-			}
-		}
-	}
-	if v, ok := preferences["price_range"]; ok && v != "" {
-		minPrice, maxPrice := parsePriceRange(v)
-		filters["min_price"] = minPrice
-		filters["max_price"] = maxPrice
-	}
-	if v, ok := preferences["location"]; ok && v != "" {
-		filters["location"] = v
-	}
-
-	if v, ok := preferences["furnished"]; ok {
-		furnished := strings.ToLower(v) == "furnished"
-		filters["furnished"] = furnished
-	}
-
-	db, err := sql.Open("sqlite3", "properties.db")
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-
-	return database.GetProperties(db, filters)
 }
 
-func parsePriceRange(priceRange string) (int, int) {
-	parts := strings.Split(priceRange, "-")
-	if len(parts) != 2 {
-		return 0, 1000000
+// createMultiSelectKeyboard generates an inline keyboard markup for Telegram bot.
+// It creates a keyboard with multiple selectable options and a "Done" button.
+func createMultiSelectKeyboard(options map[string]bool, prefix string) tgbotapi.InlineKeyboardMarkup {
+	var keyboard [][]tgbotapi.InlineKeyboardButton
+
+	for option, selected := range options {
+		var text string
+		if selected {
+			text = "✅ " + option
+		} else {
+			text = "☐ " + option
+		}
+		button := tgbotapi.NewInlineKeyboardButtonData(text, prefix+":"+option)
+		keyboard = append(keyboard, tgbotapi.NewInlineKeyboardRow(button))
 	}
 
-	// Trim spaces and parse to integers
-	min, err := strconv.Atoi(strings.TrimSpace(parts[0]))
-	if err != nil {
-		min = 0
-	}
-	max, err := strconv.Atoi(strings.TrimSpace(parts[1]))
-	if err != nil {
-		max = 1000000
-	}
+	// Add "Done" button
 
-	if min > max {
-		min, max = max, min
-	}
+	doneButton := tgbotapi.NewInlineKeyboardButtonData("Done", prefix+":done")
+	keyboard = append(keyboard, tgbotapi.NewInlineKeyboardRow(doneButton))
 
-	return min, max
+	return tgbotapi.NewInlineKeyboardMarkup(keyboard...)
+}
+
+// updateMultiSelectOption toggles the selected state of an option in a multi-select map.
+// If the option was previously selected, it becomes unselected, and vice versa.
+func updateMultiSelectOption(options map[string]bool, option string) {
+	options[option] = !options[option]
 }

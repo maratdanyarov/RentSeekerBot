@@ -18,7 +18,8 @@ func main() {
 	}
 	defer db.Close()
 
-	err = database.InitDB("properties.db")
+	// TODO: added "db" check later
+	db, err = database.InitDB("properties.db")
 	if err != nil {
 		fmt.Printf("Error initialising database: %v\\n", err)
 	}
