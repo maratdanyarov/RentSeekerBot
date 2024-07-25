@@ -1,3 +1,4 @@
+// Package database provides functionality for interacting with the SQLite database.
 package database
 
 import (
@@ -77,6 +78,20 @@ func InitDB(dbPath string) (*sql.DB, error) {
 		    last_search TIMESTAMP
 		)
 	`)
+
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS saved_listings (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER,
+		property_id INTEGER,
+		saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (user_id) REFERENCES user_preferences(user_id),
+		FOREIGN KEY (property_id) REFERENCES properties(id),
+		UNIQUE(user_id, property_id)
+	)
+	`)
+	if err != nil {
+		return nil, err
+	}
 
 	if err != nil {
 		return nil, err
@@ -239,32 +254,41 @@ func SaveUserPreferences(db *sql.DB, prefs UserPreferences) error {
 	if err != nil {
 		return err
 	}
+	furnishedJSON, err := json.Marshal(prefs.Furnished)
+	if err != nil {
+		return err
+	}
 	_, err = db.Exec(`
 		INSERT OR REPLACE INTO user_preferences
 		(user_id, property_type, min_price, max_price, bedrooms, furnished, location, last_search)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, prefs.UserID, propertyTypesJSON, prefs.MinPrice, prefs.MaxPrice, bedroomOptionsJSON, prefs.Furnished, prefs.Location, time.Now())
+	`, prefs.UserID, string(propertyTypesJSON), prefs.MinPrice, prefs.MaxPrice, string(bedroomOptionsJSON), string(furnishedJSON), prefs.Location, time.Now())
 	return err
 }
 
 // GetUserPreferences retrieves a user's search preferences from the database.
 func GetUserPreferences(db *sql.DB, userID int64) (UserPreferences, error) {
 	var prefs UserPreferences
-	var propertyTypesJSON, bedroomOptionsJSON []byte
+	var propertyTypesJSON, bedroomOptionsJSON, furnishedJSON string
 	err := db.QueryRow(`
 		SELECT user_id, property_type, min_price, max_price, bedrooms, furnished, location, last_search
 		FROM user_preferences WHERE user_id = ?
-	`, userID).Scan(&prefs.UserID, &propertyTypesJSON, &prefs.MinPrice, &prefs.MaxPrice, &bedroomOptionsJSON, &prefs.Furnished, &prefs.Location, &prefs.LastSearch)
+	`, userID).Scan(&prefs.UserID, &propertyTypesJSON, &prefs.MinPrice, &prefs.MaxPrice, &bedroomOptionsJSON, &furnishedJSON, &prefs.Location, &prefs.LastSearch)
 	if err != nil {
 		return prefs, err
 	}
 
-	err = json.Unmarshal(propertyTypesJSON, &prefs.PropertyTypes)
+	err = json.Unmarshal([]byte(propertyTypesJSON), &prefs.PropertyTypes)
 	if err != nil {
 		return prefs, err
 	}
 
-	err = json.Unmarshal(bedroomOptionsJSON, &prefs.BedroomOptions)
+	err = json.Unmarshal([]byte(bedroomOptionsJSON), &prefs.BedroomOptions)
+	if err != nil {
+		return prefs, err
+	}
+
+	err = json.Unmarshal([]byte(furnishedJSON), &prefs.Furnished)
 	if err != nil {
 		return prefs, err
 	}
@@ -275,5 +299,56 @@ func GetUserPreferences(db *sql.DB, userID int64) (UserPreferences, error) {
 // DeleteUserPreferences removes a user's search preferences from the database.
 func DeleteUserPreferences(db *sql.DB, userID int64) error {
 	_, err := db.Exec("DELETE FROM user_preferences WHERE user_id = ?", userID)
+	return err
+}
+
+// SaveListing saves a property for a user
+func SaveListing(db *sql.DB, userID int64, propertyID int) error {
+	_, err := db.Exec(`
+        INSERT OR IGNORE INTO saved_listings (user_id, property_id)
+        VALUES (?, ?)
+    `, userID, propertyID)
+	return err
+}
+
+// GetSavedListings retrieves all saved listings for a user
+func GetSavedListings(db *sql.DB, userID int64) ([]Property, error) {
+	rows, err := db.Query(`
+        SELECT p.id, p.type, p.price_per_month, p.bedrooms, p.furnished, p.location, p.description, p.photo_urls, p.web_link
+        FROM properties p
+        JOIN saved_listings sl ON p.id = sl.property_id
+        WHERE sl.user_id = ?
+    `, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var properties []Property
+	for rows.Next() {
+		var p Property
+		var photoURLsJSON string
+		err := rows.Scan(&p.ID, &p.Type, &p.PricePerMonth, &p.Bedrooms, &p.Furnished, &p.Location, &p.Description, &photoURLsJSON, &p.WebLink)
+		if err != nil {
+			return nil, err
+		}
+
+		err = json.Unmarshal([]byte(photoURLsJSON), &p.PhotoURLs)
+		if err != nil {
+			return nil, err
+		}
+
+		properties = append(properties, p)
+	}
+
+	return properties, nil
+}
+
+// DeleteSavedListing removes a specific saved listing for a user
+func DeleteSavedListing(db *sql.DB, userID int64, propertyID int) error {
+	_, err := db.Exec(`
+        DELETE FROM saved_listings
+        WHERE user_id = ? AND property_id = ?
+    `, userID, propertyID)
 	return err
 }

@@ -1,3 +1,4 @@
+// Package bot provides the core functionality for the Telegram bot.
 package bot
 
 import (
@@ -21,7 +22,7 @@ func (b *Bot) searchProperties(preferences *SearchPreferences) ([]database.Prope
 
 	if len(properties) == 0 {
 		log.Println("No properties found, relaxing filters")
-		relaxationSteps := []string{"bedrooms", "types", "price"}
+		relaxationSteps := []string{"bedrooms", "types", "price", "furnished"}
 
 		for _, step := range relaxationSteps {
 			delete(filters, step)
@@ -36,13 +37,6 @@ func (b *Bot) searchProperties(preferences *SearchPreferences) ([]database.Prope
 				break
 			}
 		}
-	}
-
-	if furnishedOptions := getSelectedOptions(preferences.FurnishedOptions); len(furnishedOptions) > 0 {
-		if len(furnishedOptions) == 1 {
-			filters["furnished"] = furnishedOptions[0] == "Furnished"
-		}
-		// If both or neither are selected, we don't apply a furnished filter
 	}
 
 	log.Printf("Found %d properties", len(properties))
@@ -68,6 +62,12 @@ func (b *Bot) buildFilters(preferences *SearchPreferences) map[string]interface{
 		}
 		if max > 0 {
 			filters["max_price"] = max
+		}
+	}
+
+	if furnishedOptions := getSelectedOptions(preferences.FurnishedOptions); len(furnishedOptions) > 0 {
+		if len(furnishedOptions) == 1 {
+			filters["furnished"] = furnishedOptions[0] == "Furnished"
 		}
 	}
 

@@ -1,3 +1,4 @@
+// Package bot provides the core functionality for the Telegram bot.
 package bot
 
 import (
@@ -118,6 +119,77 @@ func (b *Bot) handleCallbackQuery(query *tgbotapi.CallbackQuery) {
 			b.updateUserState(query.From.ID, state)
 			b.showSummary(query.Message.Chat.ID)
 		}
+	case "save":
+		if len(data) != 2 {
+			b.answerCallbackQuery(query.ID, "Invalid save request")
+			return
+		}
+		propertyID, err := strconv.Atoi(data[1])
+		if err != nil {
+			b.answerCallbackQuery(query.ID, "Invalid property ID")
+			return
+		}
+		err = database.SaveListing(b.db, int64(query.From.ID), propertyID)
+		if err != nil {
+			b.answerCallbackQuery(query.ID, "Error saving listing")
+			return
+		}
+
+		// Update the message to reflect that the listing has been saved
+		editMsg := tgbotapi.NewEditMessageText(
+			query.Message.Chat.ID,
+			query.Message.MessageID,
+			query.Message.Text+"\n\n✅ Saved",
+		)
+		editMsg.ParseMode = "HTML"
+
+		// Create the keyboard markup and assign its address to ReplyMarkup
+		keyboard := tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("Saved ✅", "noop"),
+			),
+		)
+		editMsg.ReplyMarkup = &keyboard
+
+		_, err = b.api.Send(editMsg)
+		if err != nil {
+			log.Printf("Error updating message: %v", err)
+		}
+
+		b.answerCallbackQuery(query.ID, "Listing saved successfully!")
+	case "noop":
+		// Do nothing for the "Saved ✅" button
+		b.answerCallbackQuery(query.ID, "")
+	case "delete":
+		if len(data) != 2 {
+			b.answerCallbackQuery(query.ID, "Invalid delete request")
+			return
+		}
+		propertyID, err := strconv.Atoi(data[1])
+		if err != nil {
+			b.answerCallbackQuery(query.ID, "Invalid property ID")
+			return
+		}
+		err = database.DeleteSavedListing(b.db, int64(query.From.ID), propertyID)
+		if err != nil {
+			b.answerCallbackQuery(query.ID, "Error deleting listing")
+			return
+		}
+
+		// Update the message to reflect that the listing has been deleted
+		editMsg := tgbotapi.NewEditMessageText(
+			query.Message.Chat.ID,
+			query.Message.MessageID,
+			query.Message.Text+"\n\n❌ Deleted",
+		)
+		editMsg.ParseMode = "HTML"
+
+		_, err = b.api.Send(editMsg)
+		if err != nil {
+			log.Printf("Error updating message: %v", err)
+		}
+
+		b.answerCallbackQuery(query.ID, "Listing deleted successfully!")
 	}
 
 	b.updateUserState(int64(query.From.ID), state)
@@ -162,6 +234,8 @@ Below are the commands you can use to interact with the bot:
 	5.	/clear_preferences - Clears all your saved search preferences.
 	
 	6.	/help - Provides information about all available commands and their usage.
+
+ 	7.  /saved - View all your saved property listings. To save a listing, use the "Save Listing" button that appears below each property listing.
 	
 
 If you need further assistance or have any questions, please do not hesitate to contact our support team. Thank you for using RentSeekerBot!
@@ -488,4 +562,21 @@ func (b *Bot) performSearch(chatID int64, prefs database.UserPreferences) {
 	}
 
 	b.presentSearchResults(chatID, properties)
+}
+
+// handleViewSavedListings shows all saved property listings
+func (b *Bot) handleViewSavedListings(message *tgbotapi.Message) {
+	properties, err := database.GetSavedListings(b.db, message.From.ID)
+	if err != nil {
+		b.sendMessage(message.Chat.ID, "Sorry, there was an error retrieving your saved listings. Please try again.", nil)
+		return
+	}
+
+	if len(properties) == 0 {
+		b.sendMessage(message.Chat.ID, "You haven't saved any listings yet.", nil)
+		return
+	}
+
+	b.sendMessage(message.Chat.ID, "Here are your saved listings:", nil)
+	b.presentMultipleProperties(message.Chat.ID, properties, true)
 }

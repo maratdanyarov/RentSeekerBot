@@ -118,6 +118,8 @@ func (b *Bot) handleCommand(message *tgbotapi.Message) {
 		b.handleViewPreferences(message)
 	case "clear_preferences":
 		b.handleClearPreferences(message)
+	case "saved":
+		b.handleViewSavedListings(message)
 	default:
 		b.sendMessage(message.Chat.ID, "Unknown command. Type /help for available commands.", nil)
 	}

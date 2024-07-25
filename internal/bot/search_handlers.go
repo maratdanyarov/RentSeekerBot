@@ -1,3 +1,4 @@
+// Package bot provides the core functionality for the Telegram bot.
 package bot
 
 import (
@@ -73,10 +74,7 @@ func (b *Bot) presentSearchResults(chatID int64, properties []database.Property)
 
 	// Present first 3 properties (or less if there are fewer than 3)
 	numInitialProperties := min(3, len(properties))
-	for _, prop := range properties[:numInitialProperties] {
-		b.presentProperty(chatID, prop)
-		time.Sleep(2 * time.Second)
-	}
+	b.presentMultipleProperties(chatID, properties[:numInitialProperties], false) // Note the 'false' here
 
 	if len(properties) > 3 {
 		b.sendMessage(chatID, "As the bot is in testing mode, please assume that several hours have passed. So, a few moments later…", nil)
@@ -84,20 +82,17 @@ func (b *Bot) presentSearchResults(chatID int64, properties []database.Property)
 
 		// Present next 2 properties (or less if there are fewer than 5 total)
 		numNextProperties := min(2, len(properties)-3)
-		for _, prop := range properties[3 : 3+numNextProperties] {
-			b.presentProperty(chatID, prop)
-			time.Sleep(2 * time.Second)
-		}
+		b.presentMultipleProperties(chatID, properties[3:3+numNextProperties], false) // Note the 'false' here
 
 		if len(properties) > 5 {
 			b.sendMessage(chatID, "As the bot is in testing mode, please assume that one day has passed. So, a few moments later…", nil)
 			time.Sleep(5 * time.Second)
 
 			b.sendMessage(chatID, "🔔 Alert: New property found matching your criteria!", nil)
-			time.Sleep(1 * time.Second)
+			time.Sleep(time.Second)
 
 			// Present the last property
-			b.presentProperty(chatID, properties[len(properties)-1])
+			b.presentMultipleProperties(chatID, properties[len(properties)-1:], false) // Note the 'false' here
 		}
 	}
 
@@ -106,7 +101,7 @@ func (b *Bot) presentSearchResults(chatID int64, properties []database.Property)
 
 // presentProperty displays a single property to the user.
 // It formats the property information and sends it along with photos if available.
-func (b *Bot) presentProperty(chatID int64, prop database.Property) {
+func (b *Bot) presentProperty(prop database.Property, isSaved bool) (string, tgbotapi.InlineKeyboardMarkup) {
 	message := fmt.Sprintf(
 		"🏠 %s\n"+
 			"💰 £%d per month\n"+
@@ -121,26 +116,24 @@ func (b *Bot) presentProperty(chatID int64, prop database.Property) {
 		prop.Location,
 		propertyFurnished(prop.Furnished),
 		prop.Description,
-		prop.WebLink,
-	)
+		prop.WebLink)
 
-	if len(prop.PhotoURLs) > 0 {
-		media := make([]interface{}, len(prop.PhotoURLs))
-		for i, photoURL := range prop.PhotoURLs {
-			media[i] = tgbotapi.NewInputMediaPhoto(tgbotapi.FileURL(photoURL))
-		}
-
-		mediaGroup := tgbotapi.NewMediaGroup(chatID, media)
-		_, err := b.api.Send(mediaGroup)
-		if err != nil {
-			log.Printf("Error sending media group: %v", err)
-			// Fallback to text message if media group fails
-			b.sendMessage(chatID, message, nil)
-		}
+	var keyboard tgbotapi.InlineKeyboardMarkup
+	if isSaved {
+		keyboard = tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("Delete Listing", fmt.Sprintf("delete:%d", prop.ID)),
+			),
+		)
 	} else {
-		// If no photos, send as a text message
-		b.sendMessage(chatID, message, nil)
+		keyboard = tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("Save Listing", fmt.Sprintf("save:%d", prop.ID)),
+			),
+		)
 	}
+
+	return message, keyboard
 }
 
 // propertyFurnished converts boolean to "Furnished" or "Unfurnished"
@@ -149,4 +142,36 @@ func propertyFurnished(furnished bool) string {
 		return "Furnished"
 	}
 	return "Unfurnished"
+}
+
+// presentMultipleProperties displays multiple properties to the user.
+// It formats the property information and sends it along with photos if available.
+func (b *Bot) presentMultipleProperties(chatID int64, properties []database.Property, isSaved bool) {
+	for _, prop := range properties {
+		message, keyboard := b.presentProperty(prop, isSaved)
+
+		if len(prop.PhotoURLs) > 0 {
+			media := make([]interface{}, len(prop.PhotoURLs))
+			for i, photoURL := range prop.PhotoURLs {
+				media[i] = tgbotapi.NewInputMediaPhoto(tgbotapi.FileURL(photoURL))
+			}
+
+			mediaGroup := tgbotapi.NewMediaGroup(chatID, media)
+			_, err := b.api.Send(mediaGroup)
+			if err != nil {
+				log.Printf("Error sending media group: %v", err)
+			}
+		}
+
+		msg := tgbotapi.NewMessage(chatID, message)
+		msg.ParseMode = "HTML"
+		msg.ReplyMarkup = keyboard
+		_, err := b.api.Send(msg)
+		if err != nil {
+			log.Printf("Error sending message: %v", err)
+		}
+
+		// Add a delay between messages to avoid hitting rate limits
+		time.Sleep(time.Second)
+	}
 }
