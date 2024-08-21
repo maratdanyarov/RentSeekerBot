@@ -147,6 +147,7 @@ func equalStringSlices(a, b []string) bool {
 	return true
 }
 
+// TestBuildFilters tests filters
 func TestBuildFilters(t *testing.T) {
 	bot := &Bot{} // Create a minimal Bot instance for testing
 
