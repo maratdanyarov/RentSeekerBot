@@ -8,6 +8,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -51,8 +52,14 @@ func (b *Bot) handleCallbackQuery(query *tgbotapi.CallbackQuery) {
 	switch data[0] {
 	case "use_saved_prefs":
 		// Use saved preferences to perform a search
-		prefs, _ := database.GetUserPreferences(b.db, query.From.ID)
-		b.performSearch(query.Message.Chat.ID, prefs)
+		prefs, err := database.GetUserPreferences(b.db, query.From.ID)
+		if err != nil {
+			b.sendMessage(query.Message.Chat.ID, "Error retrieving saved preferences. Starting new search.", nil)
+			b.startNewSearch(query.Message.Chat.ID)
+		} else {
+			// Directly perform the search without sending a message
+			b.performSearch(query.Message.Chat.ID, prefs)
+		}
 	case "start_new_search":
 		b.startNewSearch(query.Message.Chat.ID)
 	case "start_preferences":
@@ -116,6 +123,7 @@ func (b *Bot) handleCallbackQuery(query *tgbotapi.CallbackQuery) {
 	case "location":
 		if data[1] == "Bath" {
 			state.Preferences.Location = "Bath"
+			state.Stage = "showing_summary" // Update the state to showing_summary
 			b.updateUserState(query.From.ID, state)
 			b.showSummary(query.Message.Chat.ID)
 		}
@@ -258,11 +266,14 @@ func (b *Bot) handleRegularMessage(message *tgbotapi.Message) {
 			return
 		}
 	case stageAwaitingLocation:
+		log.Printf("Handling awaiting_location state")
 		state.Preferences.Location = message.Text
+		log.Printf("Updated location to: %s", state.Preferences.Location)
+		b.updateUserState(message.From.ID, state)
 		b.showSummary(message.Chat.ID)
 	default:
+		log.Printf("Unhandled state: %s", state.Stage)
 		b.sendMessage(message.Chat.ID, "I'm sorry, I didn't understand that. Please use the provided buttons or follow the instructions.", nil)
-		return
 	}
 
 	b.updateUserState(int64(message.From.ID), state)
@@ -300,8 +311,15 @@ func (b *Bot) validatePriceRange(input string) bool {
 	if len(parts) != 2 {
 		return false
 	}
-	// TODO: add more validation here (e.g., checking if the values are numbers)
-	return true
+	// Trim spaces from each part
+	min := strings.TrimSpace(parts[0])
+	max := strings.TrimSpace(parts[1])
+
+	// Check if both parts are valid numbers
+	_, err1 := strconv.Atoi(min)
+	_, err2 := strconv.Atoi(max)
+
+	return err1 == nil && err2 == nil
 }
 
 // askBedrooms asks the user to select the number of bedrooms.
@@ -429,6 +447,7 @@ func (b *Bot) showSummary(chatID int64) {
 		furnishedStatus,
 		prefs.Location)
 
+	log.Printf("Sending summary message: %s", summary)
 	b.sendMessage(chatID, summary, nil)
 
 	// Perform the search
@@ -438,10 +457,11 @@ func (b *Bot) showSummary(chatID int64) {
 		return
 	}
 	if len(properties) == 0 {
-		b.sendMessage(chatID, "Sorry, no properties match your criteria. Try adjusting your prefernces and searching again.", nil)
+		b.sendMessage(chatID, "Sorry, no properties match your criteria. Try adjusting your preferences and searching again.", nil)
 		return
 	}
 
+	time.Sleep(5 * time.Second)
 	b.presentSearchResults(chatID, properties)
 }
 
@@ -521,7 +541,7 @@ func (b *Bot) handleViewPreferences(message *tgbotapi.Message) {
 		"Property Type: %s\n"+
 		"Price Range: £%d - £%d\n"+
 		"Bedrooms: %s\n"+
-		"Furnised: %v\n"+
+		"Furnished: %v\n"+
 		"Location: %s",
 		strings.Join(propertyTypes, ", "), prefs.MinPrice, prefs.MaxPrice, strings.Join(bedrooms, ", "), prefs.Furnished, prefs.Location)
 

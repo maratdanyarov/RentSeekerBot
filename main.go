@@ -1,6 +1,7 @@
 package main
 
 import (
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"imitation_project/internal/bot"
 	"imitation_project/internal/config"
 	"imitation_project/internal/database"
@@ -26,10 +27,11 @@ func main() {
 		log.Printf("Error updating existing database: %v", err)
 	}
 
-	b, err := bot.New(token, db)
+	api, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
-		log.Fatalf("Failed to create bot: %v", err)
+		log.Fatalf("Failed to create bot API: %v", err)
 	}
 
+	b := bot.New(api, db, api.Self.UserName)
 	b.Start()
 }

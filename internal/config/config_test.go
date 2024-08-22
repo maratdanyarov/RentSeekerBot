@@ -1,4 +1,3 @@
-// Package config provides functionality for loading and accessing environment variables.
 package config
 
 import (
@@ -6,34 +5,40 @@ import (
 	"testing"
 )
 
-// TestGetEnv tests the GetEnv function to ensure it correctly retrieves environment variables.
+// TestGetEnv tests the GetEnv function.
 func TestGetEnv(t *testing.T) {
-	// Set up test cases
-	testCases := []struct {
-		name     string
-		key      string
-		value    string
-		expected string
-	}{
-		{"ExistingKey", "TEST_KEY", "test_value", "test_value"},
-		{"NonExistentKey", "NON_EXISTENT_KEY", "", ""},
+	// Set a test environment variable
+	os.Setenv("TEST_ENV_VAR", "test_value")
+
+	// Test GetEnv with existing variable
+	value := GetEnv("TEST_ENV_VAR")
+	if value != "test_value" {
+		t.Errorf("GetEnv() = %v, want %v", value, "test_value")
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Set environment variable if a value is provided
-			if tc.value != "" {
-				os.Setenv(tc.key, tc.value)
-				defer os.Unsetenv(tc.key)
-			}
+	// Test GetEnv with non-existent variable
+	value = GetEnv("NON_EXISTENT_VAR")
+	if value != "" {
+		t.Errorf("GetEnv() for non-existent variable = %v, want empty string", value)
+	}
+}
 
-			// Call the function being tested
-			result := GetEnv(tc.key)
+// TestLoadConfig tests the LoadConfig function.
+func TestLoadConfig(t *testing.T) {
+	// Create a temporary .env file
+	tempEnvContent := []byte("TEST_LOAD_CONFIG=success\n")
+	err := os.WriteFile(".env", tempEnvContent, 0644)
+	if err != nil {
+		t.Fatalf("Failed to create temporary .env file: %v", err)
+	}
+	defer os.Remove(".env") // Clean up after the test
 
-			// Check if the result matches the expected value
-			if result != tc.expected {
-				t.Errorf("GetEnv(%s) = %s; want %s", tc.key, result, tc.expected)
-			}
-		})
+	// Call LoadConfig
+	LoadConfig()
+
+	// Check if the environment variable was loaded
+	value := os.Getenv("TEST_LOAD_CONFIG")
+	if value != "success" {
+		t.Errorf("LoadConfig() failed to load environment variable. Got %v, want %v", value, "success")
 	}
 }

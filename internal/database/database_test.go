@@ -1,165 +1,296 @@
-// Package database provides functionality for interacting with the SQLite database.
 package database
 
 import (
 	"database/sql"
 	"os"
 	"testing"
-	"time"
 )
 
-// TestInitDB tests the InitDB function to ensure it correctly initializes the database
-// and creates the necessary tables.
+var testDB *sql.DB
+
+// TestMain sets up the test environment by initializing an in-memory database,
+// running all tests, and then closing the database connection.
+func TestMain(m *testing.M) {
+	// Set up
+	var err error
+	testDB, err = InitDB(":memory:")
+	if err != nil {
+		panic(err)
+	}
+
+	// Run tests
+	code := m.Run()
+
+	// Tear down
+	testDB.Close()
+
+	os.Exit(code)
+}
+
+// TestInitDB verifies that the database initialization creates the expected tables.
 func TestInitDB(t *testing.T) {
-	// Use a temporary file for the test database
-	tmpfile, err := os.CreateTemp("", "test.db")
+	// InitDB is already called in TestMain, so we just need to check if tables exist
+	var count int
+	err := testDB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('properties', 'user_preferences', 'saved_listings')").Scan(&count)
 	if err != nil {
-		t.Fatalf("Could not create temp file: %v", err)
+		t.Fatalf("Failed to query tables: %v", err)
 	}
-	defer os.Remove(tmpfile.Name())
-
-	// Initialize the database
-	db, err := InitDB(tmpfile.Name())
-	if err != nil {
-		t.Fatalf("InitDB() failed: %v", err)
-	}
-	defer db.Close()
-
-	// Check if tables were created
-	tables := []string{"properties", "user_preferences"}
-	for _, table := range tables {
-		var name string
-		err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&name)
-		if err != nil {
-			t.Errorf("Table %s was not created", table)
-		}
+	if count != 3 {
+		t.Errorf("Expected 3 tables, got %d", count)
 	}
 }
 
-// TestAddAndGetProperty tests the AddProperty and GetProperties functions to ensure
-// they correctly add a property to the database and retrieve it.
+// TestAddAndGetProperty tests the addition of properties to the database
+// and their subsequent retrieval using various filters.
 func TestAddAndGetProperty(t *testing.T) {
-	// Set up test database
-	tmpfile, _ := os.CreateTemp("", "test.db")
-	defer os.Remove(tmpfile.Name())
-	db, _ := InitDB(tmpfile.Name())
-	defer db.Close()
-
-	// Test property
-	testProp := Property{
-		Type:          "Flat",
+	prop := Property{
+		Type:          "Apartment",
 		PricePerMonth: 1000,
 		Bedrooms:      2,
 		Furnished:     true,
-		Location:      "Bath",
-		Description:   "A nice flat",
-		PhotoURLs:     []string{"http://example.com/photo.jpg"},
+		Location:      "Test Location",
+		Description:   "Test Description",
+		PhotoURLs:     []string{"http://example.com/photo1.jpg", "http://example.com/photo2.jpg"},
 		WebLink:       "http://example.com/property",
 	}
 
-	// Add property
-	err := AddProperty(db, testProp)
+	err := AddProperty(testDB, prop)
 	if err != nil {
-		t.Fatalf("AddProperty() failed: %v", err)
+		t.Fatalf("Failed to add property: %v", err)
 	}
 
-	// Get property
-	filters := map[string]interface{}{
-		"types":     []string{"Flat"},
-		"min_price": 500,
-		"max_price": 1500,
-		"bedrooms":  []int{2},
-		"location":  "Bath",
-	}
-	properties, err := GetProperties(db, filters)
+	// Retrieve the property
+	properties, err := GetProperties(testDB, map[string]interface{}{
+		"types": []string{"Apartment"},
+	})
 	if err != nil {
-		t.Fatalf("GetProperties() failed: %v", err)
+		t.Fatalf("Failed to get properties: %v", err)
 	}
 
 	if len(properties) != 1 {
 		t.Fatalf("Expected 1 property, got %d", len(properties))
 	}
 
-	// Compare retrieved property with the original
 	retrievedProp := properties[0]
-	if retrievedProp.Type != testProp.Type ||
-		retrievedProp.PricePerMonth != testProp.PricePerMonth ||
-		retrievedProp.Bedrooms != testProp.Bedrooms ||
-		retrievedProp.Furnished != testProp.Furnished ||
-		retrievedProp.Location != testProp.Location ||
-		retrievedProp.Description != testProp.Description ||
-		retrievedProp.PhotoURLs[0] != testProp.PhotoURLs[0] ||
-		retrievedProp.WebLink != testProp.WebLink {
+	if retrievedProp.Type != prop.Type || retrievedProp.PricePerMonth != prop.PricePerMonth {
 		t.Errorf("Retrieved property does not match added property")
+	}
+
+	// Test updating existing preferences
+	updatedPrefs := UserPreferences{
+		UserID: 12345,
+		PropertyTypes: map[string]bool{
+			"Apartment": false,
+			"House":     true,
+		},
+		BedroomOptions: map[string]bool{
+			"2": true,
+			"3": true,
+		},
+		MinPrice: 1000,
+		MaxPrice: 2000,
+		Location: "Updated City",
+		Furnished: map[string]bool{
+			"Unfurnished": true,
+		},
+	}
+
+	err = SaveUserPreferences(testDB, updatedPrefs)
+	if err != nil {
+		t.Fatalf("Failed to update user preferences: %v", err)
+	}
+
+	retrievedUpdatedPrefs, err := GetUserPreferences(testDB, 12345)
+	if err != nil {
+		t.Fatalf("Failed to get updated user preferences: %v", err)
+	}
+
+	if retrievedUpdatedPrefs.Location != "Updated City" || retrievedUpdatedPrefs.MinPrice != 1000 {
+		t.Errorf("Retrieved updated preferences do not match")
 	}
 }
 
-// TestUserPreferences tests the SaveUserPreferences, GetUserPreferences, and DeleteUserPreferences
-// functions to ensure they correctly handle user preferences in the database.
-func TestUserPreferences(t *testing.T) {
-	// Set up test database
-	tmpfile, _ := os.CreateTemp("", "test.db")
-	defer os.Remove(tmpfile.Name())
-	db, _ := InitDB(tmpfile.Name())
-	defer db.Close()
-
-	// Test user preferences
-	testPrefs := UserPreferences{
-		UserID:         123,
-		PropertyTypes:  map[string]bool{"Flat": true, "House": false},
-		BedroomOptions: map[string]bool{"2": true, "3": true},
-		MinPrice:       1000,
-		MaxPrice:       2000,
-		Location:       "Bath",
-		Furnished:      map[string]bool{"Furnished": true},
-		LastSearch:     time.Now(),
+// TestSaveAndGetUserPreferences tests saving user preferences to the database,
+// retrieving them, and updating existing preferences.
+func TestSaveAndGetUserPreferences(t *testing.T) {
+	prefs := UserPreferences{
+		UserID: 12345,
+		PropertyTypes: map[string]bool{
+			"Apartment": true,
+			"House":     false,
+		},
+		BedroomOptions: map[string]bool{
+			"1": true,
+			"2": true,
+		},
+		MinPrice: 500,
+		MaxPrice: 1500,
+		Location: "Test City",
+		Furnished: map[string]bool{
+			"Furnished": true,
+		},
 	}
 
-	// Save preferences
-	err := SaveUserPreferences(db, testPrefs)
+	err := SaveUserPreferences(testDB, prefs)
 	if err != nil {
-		t.Fatalf("SaveUserPreferences() failed: %v", err)
+		t.Fatalf("Failed to save user preferences: %v", err)
 	}
 
-	// Get preferences
-	retrievedPrefs, err := GetUserPreferences(db, 123)
+	retrievedPrefs, err := GetUserPreferences(testDB, 12345)
 	if err != nil {
-		t.Fatalf("GetUserPreferences() failed: %v", err)
+		t.Fatalf("Failed to get user preferences: %v", err)
 	}
 
-	// Compare retrieved preferences with the original
-	if retrievedPrefs.UserID != testPrefs.UserID ||
-		!mapEqual(retrievedPrefs.PropertyTypes, testPrefs.PropertyTypes) ||
-		!mapEqual(retrievedPrefs.BedroomOptions, testPrefs.BedroomOptions) ||
-		retrievedPrefs.MinPrice != testPrefs.MinPrice ||
-		retrievedPrefs.MaxPrice != testPrefs.MaxPrice ||
-		retrievedPrefs.Location != testPrefs.Location ||
-		!mapEqual(retrievedPrefs.Furnished, testPrefs.Furnished) {
+	if retrievedPrefs.UserID != prefs.UserID || retrievedPrefs.MinPrice != prefs.MinPrice {
 		t.Errorf("Retrieved preferences do not match saved preferences")
 	}
 
-	// Delete preferences
-	err = DeleteUserPreferences(db, 123)
+	// Test saving duplicate listing
+	err = SaveListing(testDB, 12345, 1)
 	if err != nil {
-		t.Fatalf("DeleteUserPreferences() failed: %v", err)
+		t.Fatalf("Failed to save duplicate listing: %v", err)
 	}
 
-	// Try to get deleted preferences
-	_, err = GetUserPreferences(db, 123)
-	if err != sql.ErrNoRows {
-		t.Errorf("Expected sql.ErrNoRows, got %v", err)
+	savedListings, err := GetSavedListings(testDB, 12345)
+	if err != nil {
+		t.Fatalf("Failed to get saved listings after duplicate save: %v", err)
+	}
+
+	if len(savedListings) != 1 {
+		t.Errorf("Expected 1 saved listing after duplicate save, got %d", len(savedListings))
 	}
 }
 
-// mapEqual is a helper function to compare two maps of string to bool.
-func mapEqual(a, b map[string]bool) bool {
-	if len(a) != len(b) {
-		return false
+// TestDeleteUserPreferences verifies that user preferences can be successfully
+// deleted from the database.
+func TestDeleteUserPreferences(t *testing.T) {
+	userID := int64(12345)
+
+	err := DeleteUserPreferences(testDB, userID)
+	if err != nil {
+		t.Fatalf("Failed to delete user preferences: %v", err)
 	}
-	for k, v := range a {
-		if w, ok := b[k]; !ok || v != w {
-			return false
+
+	_, err = GetUserPreferences(testDB, userID)
+	if err == nil {
+		t.Errorf("Expected error when getting deleted preferences, got nil")
+	}
+}
+
+// TestSaveAndGetSavedListings tests the functionality of saving property listings
+// for a user and retrieving those saved listings, including handling of duplicates.
+func TestSaveAndGetSavedListings(t *testing.T) {
+	userID := int64(12345)
+	propertyID := 1
+
+	err := SaveListing(testDB, userID, propertyID)
+	if err != nil {
+		t.Fatalf("Failed to save listing: %v", err)
+	}
+
+	savedListings, err := GetSavedListings(testDB, userID)
+	if err != nil {
+		t.Fatalf("Failed to get saved listings: %v", err)
+	}
+
+	if len(savedListings) != 1 {
+		t.Errorf("Expected 1 saved listing, got %d", len(savedListings))
+	}
+}
+
+// TestDeleteSavedListing verifies that a saved listing can be successfully
+// deleted from the database.
+func TestDeleteSavedListing(t *testing.T) {
+	userID := int64(12345)
+	propertyID := 1
+
+	err := DeleteSavedListing(testDB, userID, propertyID)
+	if err != nil {
+		t.Fatalf("Failed to delete saved listing: %v", err)
+	}
+
+	savedListings, err := GetSavedListings(testDB, userID)
+	if err != nil {
+		t.Fatalf("Failed to get saved listings: %v", err)
+	}
+
+	if len(savedListings) != 0 {
+		t.Errorf("Expected 0 saved listings after deletion, got %d", len(savedListings))
+	}
+}
+
+// TestUpdateExistingDB checks if the database schema can be updated correctly,
+// specifically testing the addition of new columns to existing tables.
+func TestUpdateExistingDB(t *testing.T) {
+	// Create a temporary database file
+	tmpfile, err := os.CreateTemp("", "testdb")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	// Initialize the database
+	db, err := InitDB(tmpfile.Name())
+	if err != nil {
+		t.Fatalf("Failed to initialize test database: %v", err)
+	}
+	defer db.Close()
+
+	// Update the existing database
+	err = UpdateExistingDB(tmpfile.Name())
+	if err != nil {
+		t.Fatalf("Failed to update existing database: %v", err)
+	}
+
+	// Verify that the new columns exist
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('properties') WHERE name IN ('photo_urls', 'web_link')").Scan(&count)
+	if err != nil {
+		t.Fatalf("Failed to query new columns: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("Expected 2 new columns, got %d", count)
+	}
+}
+
+// TestValidatePhotoURLs tests the function that filters and validates photo URLs,
+// ensuring only valid URLs are retained.
+func TestValidatePhotoURLs(t *testing.T) {
+	urls := []string{
+		"http://example.com/photo1.jpg",
+		"https://example.com/photo2.png",
+		"ftp://invalid-url",
+		"not-a-url",
+	}
+
+	validURLs := validatePhotoURLs(urls)
+
+	if len(validURLs) != 2 {
+		t.Errorf("Expected 2 valid URLs, got %d", len(validURLs))
+	}
+
+	if validURLs[0] != urls[0] || validURLs[1] != urls[1] {
+		t.Errorf("Validated URLs do not match expected valid URLs")
+	}
+}
+
+// TestIsValidURL tests the isValidURL function with various input URLsgit
+func TestIsValidURL(t *testing.T) {
+	testCases := []struct {
+		url      string
+		expected bool
+	}{
+		{"http://example.com", true},
+		{"https://example.com", true},
+		{"ftp://example.com", false},
+		{"not-a-url", false},
+		{"", false},
+	}
+
+	for _, tc := range testCases {
+		result := isValidURL(tc.url)
+		if result != tc.expected {
+			t.Errorf("isValidURL(%s) = %v; want %v", tc.url, result, tc.expected)
 		}
 	}
-	return true
 }

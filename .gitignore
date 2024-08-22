@@ -42,4 +42,5 @@ go.mod
 # Database files
 *.db
 
+*_test.go
 Makefile

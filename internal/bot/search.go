@@ -93,9 +93,12 @@ func getSelectedBedroomOptions(options map[string]bool) []int {
 	var selected []int
 	for option, isSelected := range options {
 		if isSelected {
-			if option == "Studio" {
-				selected = append(selected, 0) // Use 0 for studio apartments
-			} else {
+			switch option {
+			case "Studio":
+				selected = append(selected, 0)
+			case "3+":
+				selected = append(selected, 3)
+			default:
 				if num, err := strconv.Atoi(option); err == nil {
 					selected = append(selected, num)
 				}

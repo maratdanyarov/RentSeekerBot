@@ -8,14 +8,22 @@ import (
 	"sync"
 )
 
+// BotAPI is an interface that wraps the methods we use from tgbotapi.BotAPI
+type BotAPI interface {
+	GetUpdatesChan(config tgbotapi.UpdateConfig) tgbotapi.UpdatesChannel
+	Send(c tgbotapi.Chattable) (tgbotapi.Message, error)
+	Request(c tgbotapi.Chattable) (*tgbotapi.APIResponse, error)
+}
+
 // Bot represents the Telegram bot instance.
 // It handles user interactions, maintains user states,
 // and interfaces with the database for property searches.
 type Bot struct {
-	api   *tgbotapi.BotAPI
-	db    *sql.DB
-	state map[int64]*UserState
-	mu    sync.Mutex
+	api         BotAPI
+	db          *sql.DB
+	state       map[int64]*UserState
+	mu          sync.Mutex
+	botUserName string // Add this field to store the bot's username
 }
 
 // SearchPreferences represents the user's search criteria for properties.
@@ -36,23 +44,19 @@ type UserState struct {
 
 // New creates a new instance of the Bot.
 // It takes a Telegram bot token as input and returns a new Bot instance and any error encountered.
-func New(token string, db *sql.DB) (*Bot, error) {
-	api, err := tgbotapi.NewBotAPI(token)
-	if err != nil {
-		return nil, err
-	}
-
+func New(api BotAPI, db *sql.DB, botUserName string) *Bot {
 	return &Bot{
-		api:   api,
-		db:    db,
-		state: make(map[int64]*UserState),
-	}, nil
+		api:         api,
+		db:          db,
+		state:       make(map[int64]*UserState),
+		botUserName: botUserName,
+	}
 }
 
 // Start begins the bot's operation.
 // It sets up the update channel and enters the main event loop to process updates.
 func (b *Bot) Start() {
-	log.Printf("Authorised an account %s", b.api.Self.UserName)
+	log.Printf("Authorised an account %s", b.botUserName)
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
@@ -174,5 +178,8 @@ func createMultiSelectKeyboard(options map[string]bool, prefix string) tgbotapi.
 // updateMultiSelectOption toggles the selected state of an option in a multi-select map.
 // If the option was previously selected, it becomes unselected, and vice versa.
 func updateMultiSelectOption(options map[string]bool, option string) {
+	if options == nil {
+		options = make(map[string]bool)
+	}
 	options[option] = !options[option]
 }

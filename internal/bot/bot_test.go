@@ -1,283 +1,341 @@
-// Package bot provides the core functionality for the Telegram bot.
 package bot
 
 import (
-	"reflect"
-	"sort"
-	"strconv"
+	"github.com/DATA-DOG/go-sqlmock"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	_ "github.com/mattn/go-sqlite3"
 	"strings"
 	"testing"
 )
 
-// TestGetSelectedOptions tests the getSelectedOptions function to ensure it correctly
-// filters and returns selected options from a map.
-func TestGetSelectedOptions(t *testing.T) {
-	testCases := []struct {
-		name     string
-		options  map[string]bool
-		expected []string
-	}{
-		{
-			name:     "AllSelected",
-			options:  map[string]bool{"A": true, "B": true, "C": true},
-			expected: []string{"A", "B", "C"},
-		},
-		{
-			name:     "SomeSelected",
-			options:  map[string]bool{"A": true, "B": false, "C": true},
-			expected: []string{"A", "C"},
-		},
-		{
-			name:     "NoneSelected",
-			options:  map[string]bool{"A": false, "B": false, "C": false},
-			expected: []string{},
-		},
+// MockBotAPI is a mock implementation of the BotAPI interface
+type MockBotAPI struct{}
+
+// GetUpdatesChan mocks the method to get updates channel
+func (m *MockBotAPI) GetUpdatesChan(config tgbotapi.UpdateConfig) tgbotapi.UpdatesChannel {
+	return make(tgbotapi.UpdatesChannel)
+}
+
+// Send mocks the method to send messages
+func (m *MockBotAPI) Send(c tgbotapi.Chattable) (tgbotapi.Message, error) {
+	return tgbotapi.Message{}, nil
+}
+
+// Request mocks the method to make API requests
+func (m *MockBotAPI) Request(c tgbotapi.Chattable) (*tgbotapi.APIResponse, error) {
+	return &tgbotapi.APIResponse{}, nil
+}
+
+// TestNew tests the New function that creates a new Bot instance
+func TestNew(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer db.Close()
+
+	mockAPI := &MockBotAPI{}
+	botUserName := "testbot"
+	b := New(mockAPI, db, botUserName)
+
+	if b == nil {
+		t.Error("New() returned nil")
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			result := getSelectedOptions(tc.options)
-			// Sort both slices before comparing
-			sort.Strings(result)
-			sort.Strings(tc.expected)
-			if !equalStringSlices(result, tc.expected) {
-				t.Errorf("getSelectedOptions() = %v; want %v", result, tc.expected)
-			}
-		})
+	if b.api != mockAPI {
+		t.Error("New() did not set the api field correctly")
+	}
+
+	if b.db != db {
+		t.Error("New() did not set the db field correctly")
+	}
+
+	if b.state == nil {
+		t.Error("New() did not initialize the state map")
+	}
+
+	if b.botUserName != botUserName {
+		t.Errorf("New() did not set the botUserName correctly. Got %s, want %s", b.botUserName, botUserName)
 	}
 }
 
-// TestGetSelectedBedroomOptions tests the getSelectedBedroomOptions function to ensure
-// it correctly converts selected bedroom options to integer values.
-func TestGetSelectedBedroomOptions(t *testing.T) {
-	testCases := []struct {
-		name     string
-		options  map[string]bool
-		expected []int
-	}{
-		{
-			name:     "MixedOptions",
-			options:  map[string]bool{"Studio": true, "1": true, "2": false, "3": true},
-			expected: []int{0, 1, 3},
-		},
-		{
-			name:     "OnlyStudio",
-			options:  map[string]bool{"Studio": true, "1": false, "2": false},
-			expected: []int{0},
-		},
-		{
-			name:     "NoSelection",
-			options:  map[string]bool{"Studio": false, "1": false, "2": false},
-			expected: []int{},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			result := getSelectedBedroomOptions(tc.options)
-			// Sort both slices before comparing
-			sort.Ints(result)
-			sort.Ints(tc.expected)
-			if !equalIntSlices(result, tc.expected) {
-				t.Errorf("getSelectedBedroomOptions() = %v; want %v", result, tc.expected)
-			}
-		})
-	}
-}
-
-// TestParsePriceRange tests the parsePriceRange function to ensure it correctly
-// parses and returns the minimum and maximum prices from a string input.
-func TestParsePriceRange(t *testing.T) {
-	testCases := []struct {
-		name        string
-		input       string
-		expectedMin int
-		expectedMax int
-	}{
-		{"ValidRange", "500-1000", 500, 1000},
-		{"ReversedRange", "1000-500", 500, 1000},
-		{"SingleNumber", "500", 0, 1000000},
-		{"InvalidFormat", "abc-def", 0, 1000000},
-		{"EmptyString", "", 0, 1000000},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			min, max := parsePriceRange(tc.input)
-			// Check if the returned min and max match the expected values
-			if min != tc.expectedMin || max != tc.expectedMax {
-				t.Errorf("parsePriceRange(%s) = (%d, %d); want (%d, %d)",
-					tc.input, min, max, tc.expectedMin, tc.expectedMax)
-			}
-		})
-	}
-}
-
-// equalIntSlices is a helper function to compare two slices of integers,
-// treating nil slices and empty slices as equal.
-func equalIntSlices(a, b []int) bool {
-	if len(a) == 0 && len(b) == 0 {
-		return true
-	}
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// equalStringSlices is a helper function to compare two slices of strings,
-// treating nil slices and empty slices as equal.
-func equalStringSlices(a, b []string) bool {
-	if len(a) == 0 && len(b) == 0 {
-		return true
-	}
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// TestBuildFilters tests filters
-func TestBuildFilters(t *testing.T) {
-	bot := &Bot{} // Create a minimal Bot instance for testing
-
-	testCases := []struct {
-		name        string
-		preferences *SearchPreferences
-		expected    map[string]interface{}
-	}{
-		{
-			name: "AllPreferences",
-			preferences: &SearchPreferences{
-				PropertyTypes:    map[string]bool{"Flat": true, "House": false},
-				BedroomOptions:   map[string]bool{"1": true, "2": true, "Studio": false},
-				FurnishedOptions: map[string]bool{"Furnished": true, "Unfurnished": false},
-				PriceRange:       "500-1000",
-				Location:         "Bath",
-			},
-			expected: map[string]interface{}{
-				"types":     []string{"Flat"},
-				"bedrooms":  []int{1, 2},
-				"min_price": 500,
-				"max_price": 1000,
-				"location":  "Bath",
-			},
-		},
-		{
-			name: "NoPreferences",
-			preferences: &SearchPreferences{
-				PropertyTypes:    map[string]bool{},
-				BedroomOptions:   map[string]bool{},
-				FurnishedOptions: map[string]bool{},
-				PriceRange:       "",
-				Location:         "Bath",
-			},
-			expected: map[string]interface{}{
-				"location": "Bath",
-			},
-		},
-		// Add more test cases here
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			result := bot.buildFilters(tc.preferences)
-
-			// Compare the result with the expected output
-			if !reflect.DeepEqual(result, tc.expected) {
-				t.Errorf("buildFilters() = %v; want %v", result, tc.expected)
-			}
-		})
-	}
-}
-
+// TestGetUserState tests the getUserState method
 func TestGetUserState(t *testing.T) {
-	bot := &Bot{
-		state: make(map[int64]*UserState),
-	}
-
-	testCases := []struct {
-		name     string
-		userID   int64
-		expected string
-	}{
-		{"NewUser", 123, "initial"},
-		{"ExistingUser", 456, "custom"},
-	}
-
-	// Set up an existing user
-	bot.state[456] = &UserState{Stage: "custom"}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			state := bot.getUserState(tc.userID)
-			if state.Stage != tc.expected {
-				t.Errorf("getUserState(%d).Stage = %s; want %s", tc.userID, state.Stage, tc.expected)
-			}
-		})
-	}
-}
-
-func TestUpdateUserState(t *testing.T) {
-	bot := &Bot{
+	b := &Bot{
 		state: make(map[int64]*UserState),
 	}
 
 	userID := int64(123)
-	newState := &UserState{Stage: "updated"}
+	state := b.getUserState(userID)
 
-	bot.updateUserState(userID, newState)
+	if state == nil {
+		t.Errorf("getUserState() returned nil")
+	}
 
-	if bot.state[userID] != newState {
+	if state.Stage != "initial" {
+		t.Errorf("getUserState() returned state with incorrect stage: got %v, want %v", state.Stage, "initial")
+	}
+
+	if state.Preferences == nil {
+		t.Errorf("getUserState() returned state with nil Preferences")
+	}
+}
+
+// TestUpdateUserState tests the updateUserState method
+func TestUpdateUserState(t *testing.T) {
+	b := &Bot{
+		state: make(map[int64]*UserState),
+	}
+
+	userID := int64(123)
+	newState := &UserState{
+		Stage: "test_stage",
+		Preferences: &SearchPreferences{
+			PropertyTypes: map[string]bool{"Apartment": true},
+		},
+	}
+
+	b.updateUserState(userID, newState)
+
+	if b.state[userID] != newState {
 		t.Errorf("updateUserState() did not update the state correctly")
 	}
 }
 
-// TestValidatePriceRange tests the validatePriceRange function
-func TestValidatePriceRange(t *testing.T) {
-	testCases := []struct {
-		name     string
-		input    string
-		expected bool
-	}{
-		{"ValidRange", "500-1000", true},
-		{"InvalidFormat", "500_1000", false},
-		{"SingleNumber", "500", false},
-		{"EmptyString", "", false},
-		{"NonNumeric", "abc-def", false},
+// TestStartNewSearch tests the startNewSearch method
+func TestStartNewSearch(t *testing.T) {
+	mockAPI := &MockBotAPI3{}
+	bot := &Bot{
+		api:   mockAPI,
+		state: make(map[int64]*UserState),
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			result := validatePriceRange(tc.input)
-			if result != tc.expected {
-				t.Errorf("validatePriceRange(%s) = %v; want %v", tc.input, result, tc.expected)
-			}
-		})
-	}
-}
+	bot.startNewSearch(123)
 
-func validatePriceRange(input string) bool {
-	parts := strings.Split(input, "-")
-	if len(parts) != 2 {
-		return false
-	}
+	if len(mockAPI.messages) != 2 {
+		t.Errorf("Expected 2 messages to be sent, but got %d", len(mockAPI.messages))
+	} else {
+		// Check first message
+		firstMessage := mockAPI.messages[0]
+		if firstMessage.ChatID != 123 {
+			t.Errorf("Expected first message to be sent to chat ID 123, but was sent to %d", firstMessage.ChatID)
+		}
+		expectedContent := "Let's start your property search"
+		if !strings.Contains(firstMessage.Text, expectedContent) {
+			t.Errorf("Expected first message to contain '%s', but it didn't. Message: %s", expectedContent, firstMessage.Text)
+		}
 
-	for _, part := range parts {
-		if _, err := strconv.Atoi(strings.TrimSpace(part)); err != nil {
-			return false
+		// Check second message
+		secondMessage := mockAPI.messages[1]
+		if secondMessage.ChatID != 123 {
+			t.Errorf("Expected second message to be sent to chat ID 123, but was sent to %d", secondMessage.ChatID)
+		}
+		expectedContent = "Select property type(s):"
+		if !strings.Contains(secondMessage.Text, expectedContent) {
+			t.Errorf("Expected second message to contain '%s', but it didn't. Message: %s", expectedContent, secondMessage.Text)
+		}
+		if secondMessage.ReplyMarkup == nil {
+			t.Error("Expected reply markup (keyboard) to be set for the second message, but it wasn't")
 		}
 	}
 
-	return true
+	state, exists := bot.state[123]
+	if !exists {
+		t.Error("Expected user state to be created, but it wasn't")
+	} else if state.Stage != "awaiting_property_type" {
+		t.Errorf("Expected user state stage to be 'awaiting_property_type', but got '%s'", state.Stage)
+	}
+}
+
+// TestAskPropertyType tests the askPropertyType method
+func TestAskPropertyType(t *testing.T) {
+	mockAPI := &MockBotAPI3{}
+	bot := &Bot{
+		api:   mockAPI,
+		state: make(map[int64]*UserState),
+	}
+
+	bot.askPropertyType(123)
+
+	if len(mockAPI.messages) != 1 {
+		t.Errorf("Expected 1 message to be sent, but got %d", len(mockAPI.messages))
+	} else {
+		sentMessage := mockAPI.messages[0]
+		if sentMessage.ChatID != 123 {
+			t.Errorf("Expected message to be sent to chat ID 123, but was sent to %d", sentMessage.ChatID)
+		}
+		expectedContent := "Select property type(s):"
+		if !strings.Contains(sentMessage.Text, expectedContent) {
+			t.Errorf("Expected message to contain '%s', but it didn't. Message: %s", expectedContent, sentMessage.Text)
+		}
+		if sentMessage.ReplyMarkup == nil {
+			t.Error("Expected reply markup (keyboard) to be set, but it wasn't")
+		}
+	}
+
+	state, exists := bot.state[123]
+	if !exists {
+		t.Error("Expected user state to be created, but it wasn't")
+	} else if state.Stage != "awaiting_property_type" {
+		t.Errorf("Expected user state stage to be 'awaiting_property_type', but got '%s'", state.Stage)
+	}
+}
+
+// TestAskPriceRange tests the askPriceRange method
+func TestAskPriceRange(t *testing.T) {
+	mockAPI := &MockBotAPI3{}
+	bot := &Bot{
+		api:   mockAPI,
+		state: make(map[int64]*UserState),
+	}
+
+	bot.askPriceRange(123)
+
+	if len(mockAPI.messages) != 1 {
+		t.Errorf("Expected 1 message to be sent, but got %d", len(mockAPI.messages))
+	} else {
+		sentMessage := mockAPI.messages[0]
+		if sentMessage.ChatID != 123 {
+			t.Errorf("Expected message to be sent to chat ID 123, but was sent to %d", sentMessage.ChatID)
+		}
+		expectedContent := "Let me know the price range for the monthly rent in GBP"
+		if !strings.Contains(sentMessage.Text, expectedContent) {
+			t.Errorf("Expected message to contain '%s', but it didn't. Message: %s", expectedContent, sentMessage.Text)
+		}
+	}
+
+	state, exists := bot.state[123]
+	if !exists {
+		t.Error("Expected user state to be created, but it wasn't")
+	} else if state.Stage != "awaiting_price_range" {
+		t.Errorf("Expected user state stage to be 'awaiting_price_range', but got '%s'", state.Stage)
+	}
+}
+
+// TestValidatePriceRange tests the validatePriceRange method
+func TestValidatePriceRange(t *testing.T) {
+	bot := &Bot{}
+
+	// Test cases for price range validation
+	testCases := []struct {
+		input    string
+		expected bool
+	}{
+		{"1000 - 2000", true},
+		{"500-1500", true},
+		{"1000", false},
+		{"1000 - ", false},
+		{" - 2000", false},
+		{"abc - def", false},
+		{"1000 - 500", true},
+	}
+
+	for _, tc := range testCases {
+		result := bot.validatePriceRange(tc.input)
+		if result != tc.expected {
+			t.Errorf("validatePriceRange(%s) = %v, want %v", tc.input, result, tc.expected)
+		}
+	}
+}
+
+// TestAskBedrooms tests the askBedrooms method
+func TestAskBedrooms(t *testing.T) {
+	mockAPI := &MockBotAPI3{}
+	bot := &Bot{
+		api:   mockAPI,
+		state: make(map[int64]*UserState),
+	}
+
+	bot.askBedrooms(123)
+
+	if len(mockAPI.messages) != 1 {
+		t.Errorf("Expected 1 message to be sent, but got %d", len(mockAPI.messages))
+	} else {
+		sentMessage := mockAPI.messages[0]
+		if sentMessage.ChatID != 123 {
+			t.Errorf("Expected message to be sent to chat ID 123, but was sent to %d", sentMessage.ChatID)
+		}
+		expectedContent := "Select the number of bedrooms"
+		if !strings.Contains(sentMessage.Text, expectedContent) {
+			t.Errorf("Expected message to contain '%s', but it didn't. Message: %s", expectedContent, sentMessage.Text)
+		}
+		if sentMessage.ReplyMarkup == nil {
+			t.Error("Expected reply markup (keyboard) to be set, but it wasn't")
+		}
+	}
+
+	state, exists := bot.state[123]
+	if !exists {
+		t.Error("Expected user state to be created, but it wasn't")
+	} else if state.Stage != "awaiting_bedrooms" {
+		t.Errorf("Expected user state stage to be 'awaiting_bedrooms', but got '%s'", state.Stage)
+	}
+}
+
+// TestAskFurnished tests the askFurnished method
+func TestAskFurnished(t *testing.T) {
+	mockAPI := &MockBotAPI3{}
+	bot := &Bot{
+		api:   mockAPI,
+		state: make(map[int64]*UserState),
+	}
+
+	bot.askFurnished(123)
+
+	if len(mockAPI.messages) != 1 {
+		t.Errorf("Expected 1 message to be sent, but got %d", len(mockAPI.messages))
+	} else {
+		sentMessage := mockAPI.messages[0]
+		if sentMessage.ChatID != 123 {
+			t.Errorf("Expected message to be sent to chat ID 123, but was sent to %d", sentMessage.ChatID)
+		}
+		expectedContent := "Do you want to search for furnished or unfurnished accommodation?"
+		if !strings.Contains(sentMessage.Text, expectedContent) {
+			t.Errorf("Expected message to contain '%s', but it didn't. Message: %s", expectedContent, sentMessage.Text)
+		}
+		if sentMessage.ReplyMarkup == nil {
+			t.Error("Expected reply markup (keyboard) to be set, but it wasn't")
+		}
+	}
+
+	state, exists := bot.state[123]
+	if !exists {
+		t.Error("Expected user state to be created, but it wasn't")
+	} else if state.Stage != "awaiting_furnished" {
+		t.Errorf("Expected user state stage to be 'awaiting_furnished', but got '%s'", state.Stage)
+	}
+}
+
+// TestAskLocation tests the askLocation method
+func TestAskLocation(t *testing.T) {
+	mockAPI := &MockBotAPI3{}
+	bot := &Bot{
+		api:   mockAPI,
+		state: make(map[int64]*UserState),
+	}
+
+	bot.askLocation(123)
+
+	if len(mockAPI.messages) != 1 {
+		t.Errorf("Expected 1 message to be sent, but got %d", len(mockAPI.messages))
+	} else {
+		sentMessage := mockAPI.messages[0]
+		if sentMessage.ChatID != 123 {
+			t.Errorf("Expected message to be sent to chat ID 123, but was sent to %d", sentMessage.ChatID)
+		}
+		expectedContent := "The bot is in testing mode, so the search area is restricted to Bath"
+		if !strings.Contains(sentMessage.Text, expectedContent) {
+			t.Errorf("Expected message to contain '%s', but it didn't. Message: %s", expectedContent, sentMessage.Text)
+		}
+		if sentMessage.ReplyMarkup == nil {
+			t.Error("Expected reply markup (keyboard) to be set, but it wasn't")
+		}
+	}
+
+	state, exists := bot.state[123]
+	if !exists {
+		t.Error("Expected user state to be created, but it wasn't")
+	} else if state.Stage != "awaiting_location" {
+		t.Errorf("Expected user state stage to be 'awaiting_location', but got '%s'", state.Stage)
+	}
 }
