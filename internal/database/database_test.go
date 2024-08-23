@@ -11,17 +11,15 @@ var testDB *sql.DB
 // TestMain sets up the test environment by initializing an in-memory database,
 // running all tests, and then closing the database connection.
 func TestMain(m *testing.M) {
-	// Set up
+
 	var err error
 	testDB, err = InitDB(":memory:")
 	if err != nil {
 		panic(err)
 	}
 
-	// Run tests
 	code := m.Run()
 
-	// Tear down
 	testDB.Close()
 
 	os.Exit(code)

@@ -118,7 +118,6 @@ func TestHandleStartCommand(t *testing.T) {
 		},
 	}
 
-	// Mock the database query if needed
 	mock.ExpectQuery("SELECT").WillReturnRows(sqlmock.NewRows([]string{"id"}))
 
 	bot.handleStartCommand(message)

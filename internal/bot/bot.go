@@ -23,7 +23,7 @@ type Bot struct {
 	db          *sql.DB
 	state       map[int64]*UserState
 	mu          sync.Mutex
-	botUserName string // Add this field to store the bot's username
+	botUserName string
 }
 
 // SearchPreferences represents the user's search criteria for properties.
@@ -166,8 +166,6 @@ func createMultiSelectKeyboard(options map[string]bool, prefix string) tgbotapi.
 		button := tgbotapi.NewInlineKeyboardButtonData(text, prefix+":"+option)
 		keyboard = append(keyboard, tgbotapi.NewInlineKeyboardRow(button))
 	}
-
-	// Add "Done" button
 
 	doneButton := tgbotapi.NewInlineKeyboardButtonData("Done", prefix+":done")
 	keyboard = append(keyboard, tgbotapi.NewInlineKeyboardRow(doneButton))
